@@ -1462,16 +1462,16 @@ class SlackChannel(object):
         here = w.nicklist_search_group(self.channel_buffer, '', NICK_GROUP_HERE)
         if not here:
            here = w.nicklist_add_group(self.channel_buffer, '', NICK_GROUP_HERE, "weechat.color.nicklist_group", 1)
-
         afk = w.nicklist_search_group(self.channel_buffer, '', NICK_GROUP_AWAY)
         if not afk:
            afk = w.nicklist_add_group(self.channel_buffer, '', NICK_GROUP_AWAY, "weechat.color.nicklist_group", 1)
 
         if user and len(self.members) < 1000:
             user = self.team.users[user]
-            group = afk
 
-            if user.presence == "active":
+            if user.presence == "away":
+              group = afk
+            else:
               group = here
 
             nick = w.nicklist_search_nick(self.channel_buffer, "", user.slack_name)
@@ -1491,10 +1491,10 @@ class SlackChannel(object):
                         if user.deleted:
                             continue
 
-                        group = afk
-
-                        if user.presence == "active":
-                            group = here
+                        if user.presence == "away":
+                          group = afk
+                        else:
+                          group = here
 
                         # if self.team.is_user_present(user):
                         #   group = here
