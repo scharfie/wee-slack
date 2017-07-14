@@ -1261,7 +1261,7 @@ class SlackChannel(object):
             self.eventrouter.receive(s)
 
     def buffer_prnt(self, nick, text, timestamp=str(time.time()), tagset=None, tag_nick=None, **kwargs):
-        data = "{}\t{}".format(nick, text)
+        # data = "{}\t{}".format(nick, text)
         ts = SlackTS(timestamp)
         last_read = SlackTS(self.last_read)
         # without this, DMs won't open automatically
@@ -1291,7 +1291,11 @@ class SlackChannel(object):
                 if config.unhide_buffers_with_activity and not self.is_visible() and (self.identifier not in self.team.muted_channels):
                     w.buffer_set(self.channel_buffer, "hidden", "0")
 
-                w.prnt_date_tags(self.channel_buffer, ts.major, tags, data)
+                for line in text.split("\n"):
+                    data = u"{}\t{}".format(nick, text).encode('utf-8')
+                    w.prnt_date_tags(self.channel_buffer, ts.major, tags, data)
+
+                # w.prnt_date_tags(self.channel_buffer, ts.major, tags, data)
                 modify_print_time(self.channel_buffer, ts.minorstr(), ts.major)
                 if backlog:
                     self.mark_read(ts, update_remote=False, force=True)
@@ -1480,7 +1484,7 @@ class SlackChannel(object):
             # now add it back in to whichever..
             if user.identifier in self.members:
                 # w.nicklist_add_nick(self.channel_buffer, "", user.name, user.color_name, "", "", 1)
-                w.nicklist_add_nick(self.channel_buffer, group, user.name + " (" +user.presence + ")", user.color_name, "", "", 1)
+                w.nicklist_add_nick(self.channel_buffer, group, user.name, user.color_name, "", "", 1)
 
         # if we didn't get a user, build a complete list. this is expensive.
         else:
@@ -1500,7 +1504,7 @@ class SlackChannel(object):
                         #   group = here
 
                         # w.nicklist_add_nick(self.channel_buffer, "", user.name, user.color_name, "", "", 1)
-                        w.nicklist_add_nick(self.channel_buffer, group, user.name + " (" + user.presence + ")", user.color_name, "", "", 1)
+                        w.nicklist_add_nick(self.channel_buffer, group, user.name, user.color_name, "", "", 1)
                 except Exception as e:
                     dbg("DEBUG: {} {} {}".format(self.identifier, self.name, e))
             else:
