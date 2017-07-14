@@ -1112,6 +1112,8 @@ class SlackChannel(object):
         self.current_short_name = self.name
         self.update_nicklist()
 
+        self.previous_sender = None
+
     def __eq__(self, compare_str):
         if compare_str == self.slack_name or compare_str == self.formatted_name() or compare_str == self.formatted_name(style="long_default"):
             return True
@@ -1123,6 +1125,9 @@ class SlackChannel(object):
 
     def set_name(self, slack_name):
         self.name = "#" + slack_name
+
+    def set_previous_sender(self, sender):
+        self.previous_sender = sender
 
     def refresh(self):
         return self.rename()
@@ -2223,7 +2228,19 @@ def process_message(message_json, eventrouter, store=True, **kwargs):
                 channel.unread_count_display += 1
             except:
                 channel.unread_count_display = 1
-            channel.buffer_prnt(message.sender, text + suffix, message.ts, tag_nick=message.sender_plain, **kwargs)
+
+            prefix_same_nick = w.config_string(w.config_get('weechat.look.prefix_same_nick'))
+            previous_sender = channel.previous_sender
+            sender = message.sender
+
+            if previous_sender == sender:
+                if prefix_same_nick != "":
+                    color = get_nick_color_name(message.sender_plain)
+                    sender = w.color(color) + prefix_same_nick
+            else:
+                channel.previous_sender = sender
+
+            channel.buffer_prnt(sender, text + suffix, message.ts, tag_nick=message.sender_plain, **kwargs)
 
         if store:
             channel.store_message(message, team)
