@@ -1479,10 +1479,10 @@ class SlackChannel(object):
         if user and len(self.members) < 1000:
             user = self.team.users[user]
 
-            if user.presence == "away":
-              group = afk
-            else:
+            if self.team.is_user_present(user.identifier):
               group = here
+            else:
+              group = afk
 
             nick = w.nicklist_search_nick(self.channel_buffer, "", user.slack_name)
             # since this is a change just remove it regardless of where it is
@@ -1501,10 +1501,10 @@ class SlackChannel(object):
                         if user.deleted:
                             continue
 
-                        if user.presence == "away":
-                          group = afk
-                        else:
+                        if self.team.is_user_present(user.identifier):
                           group = here
+                        else:
+                          group = afk
 
                         # if self.team.is_user_present(user):
                         #   group = here
@@ -1514,6 +1514,7 @@ class SlackChannel(object):
                 except Exception as e:
                     dbg("DEBUG: {} {} {}".format(self.identifier, self.name, e))
             else:
+                w.nicklist_remove_all(self.channel_buffer)
                 for fn in ["1| too", "2| many", "3| users", "4| to", "5| show"]:
                     w.nicklist_add_group(self.channel_buffer, '', fn, w.color('white'), 1)
 
