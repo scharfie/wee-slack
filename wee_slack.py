@@ -697,7 +697,7 @@ def typing_notification_cb(signal, sig_type, data):
         if typing_timer + 4 < now:
             current_buffer = w.current_buffer()
             channel = EVENTROUTER.weechat_controller.buffers.get(current_buffer, None)
-            if channel:
+            if channel and channel.type != "thread":
                 identifier = channel.identifier
                 request = {"type": "typing", "channel": identifier}
                 channel.team.send_to_websocket(request, expect_reply=False)
@@ -975,6 +975,7 @@ class SlackTeam(object):
             self.channel_buffer = w.buffer_new("{}".format(self.preferred_name), "buffer_input_callback", "EVENTROUTER", "", "")
             self.eventrouter.weechat_controller.register_buffer(self.channel_buffer, self)
             w.buffer_set(self.channel_buffer, "localvar_set_type", 'server')
+            w.buffer_set(self.channel_buffer, "localvar_set_nick", self.nick)
             if w.config_string(w.config_get('irc.look.server_buffer')) == 'merge_with_core':
                 w.buffer_merge(self.channel_buffer, w.buffer_search_main())
             w.buffer_set(self.channel_buffer, "nicklist", "1")
@@ -1233,6 +1234,7 @@ class SlackChannel(object):
             else:
                 w.buffer_set(self.channel_buffer, "localvar_set_type", 'channel')
             w.buffer_set(self.channel_buffer, "localvar_set_channel", self.formatted_name())
+            w.buffer_set(self.channel_buffer, "localvar_set_nick", self.team.nick)
             w.buffer_set(self.channel_buffer, "short_name", self.formatted_name(style="sidebar", enable_color=True))
             self.render_topic()
             self.eventrouter.weechat_controller.set_refresh_buffer_list(True)
@@ -1791,6 +1793,7 @@ class SlackThreadChannel(object):
             self.channel_buffer = w.buffer_new(self.formatted_name(style="long_default"), "buffer_input_callback", "EVENTROUTER", "", "")
             self.eventrouter.weechat_controller.register_buffer(self.channel_buffer, self)
             w.buffer_set(self.channel_buffer, "localvar_set_type", 'channel')
+            w.buffer_set(self.channel_buffer, "localvar_set_nick", self.team.nick)
             w.buffer_set(self.channel_buffer, "localvar_set_channel", self.formatted_name())
             w.buffer_set(self.channel_buffer, "short_name", self.formatted_name(style="sidebar", enable_color=True))
             time_format = w.config_string(w.config_get("weechat.look.buffer_time_format"))
@@ -2554,9 +2557,16 @@ def linkify_text(message, team, channel):
     usernames = team.get_username_map()
     channels = team.get_channel_map()
     message = (message
+        # Replace IRC formatting chars with Slack formatting chars.
         .replace('\x02', '*')
         .replace('\x1D', '_')
         .replace('\x1F', config.map_underline_to)
+        # Escape chars that have special meaning to Slack. Note that we do not
+        # (and should not) perform a full URL escaping here.
+        # See https://api.slack.com/docs/message-formatting for details.
+        .replace('<', '&lt')
+        .replace('>', '&gt')
+        .replace('&', '&amp')
         .split(' '))
     for item in enumerate(message):
         targets = re.match('^\s*([@#])([\w.-]+[\w. -])(\W*)', item[1])
@@ -2870,14 +2880,17 @@ def msg_command_cb(data, current_buffer, args):
     dbg("msg_command_cb")
     aargs = args.split(None, 2)
     who = aargs[1]
-    command_talk(data, current_buffer, who)
+    if who == "*":
+        who = EVENTROUTER.weechat_controller.buffers[current_buffer].slack_name
+    else:
+        command_talk(data, current_buffer, who)
 
     if len(aargs) > 2:
         message = aargs[2]
         team = EVENTROUTER.weechat_controller.buffers[current_buffer].team
         cmap = team.get_channel_map()
         if who in cmap:
-            channel = team.channels[cmap[channel]]
+            channel = team.channels[cmap[who]]
             channel.send_message(message)
     return w.WEECHAT_RC_OK_EAT
 
