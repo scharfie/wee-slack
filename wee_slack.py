@@ -610,15 +610,17 @@ def buffer_input_callback(signal, buffer_ptr, data):
     eventrouter = eval(signal)
     channel = eventrouter.weechat_controller.get_channel_from_buffer_ptr(buffer_ptr)
     if not channel:
-        return w.WEECHAT_RC_OK_EAT
+        return w.WEECHAT_RC_ERROR
 
     reaction = re.match("^\s*(\d*)(\+|-):(.*):\s*$", data)
+    substitute = re.match("^(\d*)s/", data)
     if reaction:
         if reaction.group(2) == "+":
             channel.send_add_reaction(int(reaction.group(1) or 1), reaction.group(3))
         elif reaction.group(2) == "-":
             channel.send_remove_reaction(int(reaction.group(1) or 1), reaction.group(3))
-    elif data.startswith('s/'):
+    elif substitute:
+        msgno = int(substitute.group(1) or 1)
         try:
             old, new, flags = re.split(r'(?<!\\)/', data)[1:]
         except ValueError:
@@ -628,11 +630,11 @@ def buffer_input_callback(signal, buffer_ptr, data):
             # rid of escapes.
             new = new.replace(r'\/', '/')
             old = old.replace(r'\/', '/')
-            channel.edit_previous_message(old, new, flags)
+            channel.edit_nth_previous_message(msgno, old, new, flags)
     else:
         channel.send_message(data)
         # this is probably wrong channel.mark_read(update_remote=True, force=True)
-    return w.WEECHAT_RC_ERROR
+    return w.WEECHAT_RC_OK
 
 
 def buffer_switch_callback(signal, sig_type, data):
@@ -1082,6 +1084,14 @@ class SlackTeam(object):
             dbg("Unexpected error: {}\nSent: {}".format(sys.exc_info()[0], data))
             self.set_connected()
 
+    def update_member_presence(self, user, presence):
+        user.presence = presence
+
+        for c in self.channels:
+            c = self.channels[c]
+            if user.id in c.members:
+                c.update_nicklist(user.id)
+
 
 class SlackChannel(object):
     """
@@ -1146,7 +1156,7 @@ class SlackChannel(object):
 
     def set_unread_count_display(self, count):
         self.unread_count_display = count
-        if (self.unread_count_display > 0):
+        for c in range(self.unread_count_display):
             if self.type == "im":
                 w.buffer_set(self.channel_buffer, "hotlist", "2")
             else:
@@ -1346,8 +1356,8 @@ class SlackChannel(object):
         modify_buffer_line(self.channel_buffer, text, ts.major, ts.minor)
         return True
 
-    def edit_previous_message(self, old, new, flags):
-        message = self.my_last_message()
+    def edit_nth_previous_message(self, n, old, new, flags):
+        message = self.my_last_message(n)
         if new == "" and old == "":
             s = SlackRequest(self.team.token, "chat.delete", {"channel": self.identifier, "ts": message['ts']}, team_hash=self.team.team_hash, channel_identifier=self.identifier)
             self.eventrouter.receive(s)
@@ -1360,11 +1370,13 @@ class SlackChannel(object):
                 s = SlackRequest(self.team.token, "chat.update", {"channel": self.identifier, "ts": message['ts'], "text": new_message}, team_hash=self.team.team_hash, channel_identifier=self.identifier)
                 self.eventrouter.receive(s)
 
-    def my_last_message(self):
+    def my_last_message(self, msgno):
         for message in reversed(self.sorted_message_keys()):
             m = self.messages[message]
             if "user" in m.message_json and "text" in m.message_json and m.message_json["user"] == self.team.myidentifier:
-                return m.message_json
+                msgno -= 1
+                if msgno == 0:
+                    return m.message_json
 
     def is_visible(self):
         return w.buffer_get_integer(self.channel_buffer, "hidden") == 0
@@ -1470,7 +1482,6 @@ class SlackChannel(object):
         w.buffer_set(self.channel_buffer, "nicklist", "1")
         # create nicklists for the current channel if they don't exist
         # if they do, use the existing pointer
-        # TODO: put this back for mithrandir
         here = w.nicklist_search_group(self.channel_buffer, '', NICK_GROUP_HERE)
         if not here:
            here = w.nicklist_add_group(self.channel_buffer, '', NICK_GROUP_HERE, "weechat.color.nicklist_group", 1)
@@ -1490,9 +1501,11 @@ class SlackChannel(object):
             # since this is a change just remove it regardless of where it is
             w.nicklist_remove_nick(self.channel_buffer, nick)
             # now add it back in to whichever..
+            nick_group = afk
+            if self.team.is_user_present(user.identifier):
+                nick_group = here
             if user.identifier in self.members:
-                # w.nicklist_add_nick(self.channel_buffer, "", user.name, user.color_name, "", "", 1)
-                w.nicklist_add_nick(self.channel_buffer, group, user.name, user.color_name, "", "", 1)
+                w.nicklist_add_nick(self.channel_buffer, nick_group, user.name, user.color_name, "", "", 1)
 
         # if we didn't get a user, build a complete list. this is expensive.
         else:
@@ -1502,17 +1515,10 @@ class SlackChannel(object):
                         user = self.team.users[user]
                         if user.deleted:
                             continue
-
+                        nick_group = afk
                         if self.team.is_user_present(user.identifier):
-                          group = here
-                        else:
-                          group = afk
-
-                        # if self.team.is_user_present(user):
-                        #   group = here
-
-                        # w.nicklist_add_nick(self.channel_buffer, "", user.name, user.color_name, "", "", 1)
-                        w.nicklist_add_nick(self.channel_buffer, group, user.name, user.color_name, "", "", 1)
+                            nick_group = here
+                        w.nicklist_add_nick(self.channel_buffer, nick_group, user.name, user.color_name, "", "", 1)
                 except Exception as e:
                     dbg("DEBUG: {} {} {}".format(self.identifier, self.name, e))
             else:
@@ -1793,7 +1799,7 @@ class SlackThreadChannel(object):
             self.channel_buffer = w.buffer_new(self.formatted_name(style="long_default"), "buffer_input_callback", "EVENTROUTER", "", "")
             self.eventrouter.weechat_controller.register_buffer(self.channel_buffer, self)
             w.buffer_set(self.channel_buffer, "localvar_set_type", 'channel')
-            w.buffer_set(self.channel_buffer, "localvar_set_nick", self.team.nick)
+            w.buffer_set(self.channel_buffer, "localvar_set_nick", self.parent_message.team.nick)
             w.buffer_set(self.channel_buffer, "localvar_set_channel", self.formatted_name())
             w.buffer_set(self.channel_buffer, "short_name", self.formatted_name(style="sidebar", enable_color=True))
             time_format = w.config_string(w.config_get("weechat.look.buffer_time_format"))
@@ -2175,7 +2181,10 @@ def process_manual_presence_change(message_json, eventrouter, **kwargs):
 
 
 def process_presence_change(message_json, eventrouter, **kwargs):
-    kwargs["user"].presence = message_json["presence"]
+    if "user" in kwargs:
+        user = kwargs["user"]
+        team = kwargs["team"]
+        team.update_member_presence(user, message_json["presence"])
 
 
 def process_pref_change(message_json, eventrouter, **kwargs):
@@ -2364,9 +2373,9 @@ def subprocess_message_deleted(message_json, eventrouter, channel, team):
 
 
 def subprocess_channel_topic(message_json, eventrouter, channel, team):
-    text = unfurl_refs(message_json["text"], ignore_alt_text=False)
+    text = unhtmlescape(unfurl_refs(message_json["text"], ignore_alt_text=False))
     channel.buffer_prnt(w.prefix("network").rstrip(), text, message_json["ts"], tagset="muted")
-    channel.render_topic(message_json["topic"])
+    channel.render_topic(unhtmlescape(message_json["topic"]))
 
 
 def process_reply(message_json, eventrouter, **kwargs):
@@ -2535,10 +2544,7 @@ def render(message_json, team, channel, force=False):
         text += unfurl_refs(unwrap_attachments(message_json, text_before), ignore_alt_text=config.unfurl_ignore_alt_text)
 
         text = text.lstrip()
-        text = text.replace("\t", "    ")
-        text = text.replace("&lt;", "<")
-        text = text.replace("&gt;", ">")
-        text = text.replace("&amp;", "&")
+        text = unhtmlescape(text.replace("\t", "    "))
         if message_json.get('mrkdwn', True):
             text = render_formatting(text)
 
@@ -2626,6 +2632,12 @@ def unfurl_ref(ref, ignore_alt_text=False):
     else:
         display_text = resolve_ref(ref)
     return display_text
+
+
+def unhtmlescape(text):
+    return text.replace("&lt;", "<") \
+               .replace("&gt;", ">") \
+               .replace("&amp;", "&")
 
 
 def unwrap_attachments(message_json, text_before):
@@ -3141,7 +3153,7 @@ def command_status(data, current_buffer, args):
 
         profile = {"status_text":text,"status_emoji":emoji}
 
-        s = SlackRequest(team.token, "users.profile.set", {"profile": profile}, team_hash=team.team_hash, channel_identifier=channel.identifier)
+        s = SlackRequest(team.token, "users.profile.set", {"profile": profile}, team_hash=team.team_hash)
         EVENTROUTER.receive(s)
 
 
